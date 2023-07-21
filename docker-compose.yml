@@ -1,0 +1,82 @@
+version: '3'
+
+services:
+  db:
+    image: mariadb
+    container_name: db
+    command: --transaction-isolation=READ-COMMITTED --binlog-format=ROW --innodb-file-per-table=1 --skip-innodb-read-only-compressed
+    restart: always
+    volumes:
+      - ./db:/var/lib/mysql
+    environment:
+      - MYSQL_ROOT_PASSWORD=${ENV_MYSQL_ROOT_PASSWORD}
+      - MYSQL_PASSWORD=${ENV_MYSQL_USER_PASSWORD}
+      - MYSQL_DATABASE=${ENV_MYSQL_DB}
+      - MYSQL_USER=${ENV_MYSQL_USER}
+
+  redis:
+    image: redis:alpine
+    container_name: redis
+    restart: always
+
+  nextcloud:
+    image: nextcloud:apache
+    container_name: nextcloud
+    restart: always
+    volumes:
+      - ${ENV_NEXTCLOUD_CONFIG_FOLDER}:/var/www/html
+      - ${ENV_NEXTCLOUD_DATA_FOLDER}:/var/www/html/data/
+    environment:
+      - VIRTUAL_HOST=${ENV_DOMAIN_NAME}
+      - LETSENCRYPT_HOST=${ENV_DOMAIN_NAME}
+      - MYSQL_DATABASE=${ENV_MYSQL_DB}
+      - MYSQL_USER=${ENV_MYSQL_USER}
+      - MYSQL_PASSWORD=${ENV_MYSQL_USER_PASSWORD}
+      - MYSQL_HOST=db:3306
+      - REDIS_HOST=redis
+      - OVERWRITEPROTOCOL=https
+    links:
+      - db
+      - redis
+    depends_on:
+      - db
+      - redis
+
+  proxy:
+    image: nginxproxy/nginx-proxy
+    container_name: proxy
+    restart: always
+    ports:
+      - 80:80
+      - 443:443
+    volumes:
+      - ./proxy/conf:/etc/nginx/conf.d
+      - ./proxy/vhost:/etc/nginx/vhost.d
+      - ./proxy/html:/usr/share/nginx/html
+      - ./certs:/etc/nginx/certs:ro
+      - /var/run/docker.sock:/tmp/docker.sock:ro
+      - ./proxy/conf/proxy.conf:/etc/nginx/conf.d/proxy.conf:ro
+    environment:
+      DEFAULT_HOST: ${ENV_DOMAIN_NAME}
+      HTTPS_METHOD: noredirect
+    links:
+      - nextcloud
+    depends_on:
+      - nextcloud
+
+  letsencrypt:
+    image: nginxproxy/acme-companion
+    container_name: letsencrypt
+    restart: always
+    volumes_from:
+      - proxy
+    volumes:
+      - ./certs:/etc/nginx/certs:rw
+      - ./proxy/vhost:/etc/nginx/vhost.d
+      - ./proxy/html:/usr/share/nginx/html
+      - ./acme:/etc/acme.sh
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    links:
+      - proxy
+    depends_on:
+      - proxy
